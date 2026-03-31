@@ -95,16 +95,18 @@ extern "C" void find_index_kernel(
         #pragma HLS LOOP_TRIPCOUNT min=2 max=32768
         #pragma HLS PIPELINE II=1
 
-        if (j < particle_count) {
-            if (ptr < particle_count - 1 && cdf_buf[ptr] < u_buf[j]) {
-                // CDF[ptr] too small — advance pointer
-                ptr++;
-            } else {
-                // CDF[ptr] >= u[j] — found the match
-                xj_buf[j] = array_x_buf[ptr];
-                yj_buf[j] = array_y_buf[ptr];
-                j++;
-            }
+        if (j >= particle_count) {
+            break;
+        }
+
+        if (ptr < particle_count - 1 && cdf_buf[ptr] < u_buf[j]) {
+            // CDF[ptr] too small — advance pointer
+            ptr++;
+        } else {
+            // CDF[ptr] >= u[j] — found the match
+            xj_buf[j] = array_x_buf[ptr];
+            yj_buf[j] = array_y_buf[ptr];
+            j++;
         }
     }
 
