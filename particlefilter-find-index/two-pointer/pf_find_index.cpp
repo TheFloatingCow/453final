@@ -47,12 +47,12 @@ extern "C" void find_index_kernel(
     int n_particles
 ) {
     // Memory coalescing (inherited from mem-opt)
-    #pragma HLS INTERFACE m_axi port=cdf offset=slave bundle=gmem0 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=u offset=slave bundle=gmem1 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=array_x offset=slave bundle=gmem2 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=array_y offset=slave bundle=gmem3 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=xj offset=slave bundle=gmem4 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=yj offset=slave bundle=gmem5 depth=16384 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=cdf offset=slave bundle=gmem0 depth=16384 max_widen_bitwidth=512 num_read_outstanding=32 max_read_burst_length=64
+    #pragma HLS INTERFACE m_axi port=u offset=slave bundle=gmem1 depth=16384 max_widen_bitwidth=512 num_read_outstanding=32 max_read_burst_length=64
+    #pragma HLS INTERFACE m_axi port=array_x offset=slave bundle=gmem2 depth=16384 max_widen_bitwidth=512 num_read_outstanding=32 max_read_burst_length=64
+    #pragma HLS INTERFACE m_axi port=array_y offset=slave bundle=gmem3 depth=16384 max_widen_bitwidth=512 num_read_outstanding=32 max_read_burst_length=64
+    #pragma HLS INTERFACE m_axi port=xj offset=slave bundle=gmem4 depth=16384 max_widen_bitwidth=512 num_write_outstanding=32 max_write_burst_length=64
+    #pragma HLS INTERFACE m_axi port=yj offset=slave bundle=gmem5 depth=16384 max_widen_bitwidth=512 num_write_outstanding=32 max_write_burst_length=64
     #pragma HLS INTERFACE s_axilite port=cdf bundle=control
     #pragma HLS INTERFACE s_axilite port=u bundle=control
     #pragma HLS INTERFACE s_axilite port=array_x bundle=control
@@ -78,11 +78,14 @@ extern "C" void find_index_kernel(
         particle_count = MAX_PARTICLES;
     }
 
-    // Bulk load all inputs to on-chip BRAM
-    load_vector(cdf, cdf_buf, particle_count);
-    load_vector(u, u_buf, particle_count);
-    load_vector(array_x, array_x_buf, particle_count);
-    load_vector(array_y, array_y_buf, particle_count);
+    // Load phase: run independent memory reads in parallel across bundles.
+    {
+        #pragma HLS DATAFLOW
+        load_vector(cdf, cdf_buf, particle_count);
+        load_vector(u, u_buf, particle_count);
+        load_vector(array_x, array_x_buf, particle_count);
+        load_vector(array_y, array_y_buf, particle_count);
+    }
 
     // Two-pointer merge: single pass through both sorted arrays.
     // ptr advances through CDF, j advances through u[].
@@ -110,7 +113,10 @@ extern "C" void find_index_kernel(
         }
     }
 
-    // Bulk store outputs
-    store_vector(xj, xj_buf, particle_count);
-    store_vector(yj, yj_buf, particle_count);
+    // Store phase: run output writes in parallel on separate bundles.
+    {
+        #pragma HLS DATAFLOW
+        store_vector(xj, xj_buf, particle_count);
+        store_vector(yj, yj_buf, particle_count);
+    }
 }
