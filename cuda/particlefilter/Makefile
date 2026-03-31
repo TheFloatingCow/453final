@@ -10,10 +10,10 @@ LDFLAGS = -lm
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-    $(NVCC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
+	$(NVCC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
 run: $(TARGET)
-    ./$(TARGET) -x 128 -y 128 -z 10 -np 1000
+	./$(TARGET) -x 128 -y 128 -z 10 -np 1000
 
 clean:
-    rm -f $(TARGET)
+	rm -f $(TARGET)
