@@ -28,61 +28,13 @@ static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_part
     }
 }
 
-static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
+static void store_vector(data_t* dst, const data_t src[MAX_PARTICLES], int n_particles) {
     #pragma HLS INLINE off
-    load_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
+    store_vector_loop: for (int i = 0; i < n_particles; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
         #pragma HLS PIPELINE II=1
-        dst[i] = src[base + i];
+        dst[i] = src[i];
     }
-}
-
-static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
-    #pragma HLS INLINE off
-    store_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
-        #pragma HLS PIPELINE II=1
-        dst[base + i] = src[i];
-    }
-}
-
-static int compute_tile(
-    const data_t cdf_buf[MAX_PARTICLES],
-    const data_t array_x_buf[MAX_PARTICLES],
-    const data_t array_y_buf[MAX_PARTICLES],
-    const data_t u_tile[PARTICLE_TILE],
-    data_t xj_tile[PARTICLE_TILE],
-    data_t yj_tile[PARTICLE_TILE],
-    int n_particles,
-    int tile_count,
-    int start_ptr
-) {
-    #pragma HLS INLINE off
-
-    int ptr = start_ptr;
-    if (ptr < 0) {
-        ptr = 0;
-    }
-    if (ptr >= n_particles) {
-        ptr = n_particles - 1;
-    }
-
-    compute_tile_loop: for (int j = 0; j < tile_count; ++j) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
-        #pragma HLS PIPELINE II=1
-
-        data_t value = u_tile[j];
-
-        advance_ptr_loop: while ((ptr + 1) < n_particles && cdf_buf[ptr] < value) {
-            #pragma HLS LOOP_TRIPCOUNT min=0 max=16383
-            ptr++;
-        }
-
-        xj_tile[j] = array_x_buf[ptr];
-        yj_tile[j] = array_y_buf[ptr];
-    }
-
-    return ptr;
 }
 
 extern "C" void find_index_kernel(
@@ -110,17 +62,13 @@ extern "C" void find_index_kernel(
     #pragma HLS INTERFACE s_axilite port=n_particles bundle=control
     #pragma HLS INTERFACE s_axilite port=return bundle=control
 
-    // Keep CDF and particle state on-chip; stream u/xj/yj in tiles.
+    // Full-size on-chip buffers — no tiling needed for O(N) algorithm.
     data_t cdf_buf[MAX_PARTICLES];
+    data_t u_buf[MAX_PARTICLES];
     data_t array_x_buf[MAX_PARTICLES];
     data_t array_y_buf[MAX_PARTICLES];
-
-    data_t u_tile_a[PARTICLE_TILE];
-    data_t u_tile_b[PARTICLE_TILE];
-    data_t xj_tile_a[PARTICLE_TILE];
-    data_t xj_tile_b[PARTICLE_TILE];
-    data_t yj_tile_a[PARTICLE_TILE];
-    data_t yj_tile_b[PARTICLE_TILE];
+    data_t xj_buf[MAX_PARTICLES];
+    data_t yj_buf[MAX_PARTICLES];
 
     int particle_count = n_particles;
     if (particle_count <= 0) {
@@ -130,59 +78,39 @@ extern "C" void find_index_kernel(
         particle_count = MAX_PARTICLES;
     }
 
-    // Bulk load immutable arrays to on-chip memory.
+    // Bulk load all inputs to on-chip BRAM
     load_vector(cdf, cdf_buf, particle_count);
+    load_vector(u, u_buf, particle_count);
     load_vector(array_x, array_x_buf, particle_count);
     load_vector(array_y, array_y_buf, particle_count);
 
-    int n_tiles = (particle_count + PARTICLE_TILE - 1) / PARTICLE_TILE;
-    int ptr_state = 0;
+    // Two-pointer merge: single pass through both sorted arrays.
+    // ptr advances through CDF, j advances through u[].
+    // Each iteration either advances ptr or j — never both.
+    // Total iterations <= 2*N (ptr advances at most N-1, j advances exactly N).
+    // Fixed upper bound (2*16384) ensures HLS can statically bound the loop.
+    int ptr = 0;
+    int j = 0;
+    merge_loop: for (int iter = 0; iter < 2 * 16384; ++iter) {
+        #pragma HLS LOOP_TRIPCOUNT min=2 max=32768
+        #pragma HLS PIPELINE II=1
 
-    // Prologue: load first u tile into A.
-    {
-        int first_tile_count = PARTICLE_TILE;
-        if (first_tile_count > particle_count) {
-            first_tile_count = particle_count;
-        }
-        load_tile(u, u_tile_a, 0, first_tile_count);
-    }
-
-    tile_loop: for (int t = 0; t < n_tiles; ++t) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=64
-
-        int base = t * PARTICLE_TILE;
-        int tile_count = PARTICLE_TILE;
-        if (base + tile_count > particle_count) {
-            tile_count = particle_count - base;
+        if (j >= particle_count) {
+            break;
         }
 
-        int next_base = (t + 1) * PARTICLE_TILE;
-        int next_tile_count = PARTICLE_TILE;
-        if (next_base + next_tile_count > particle_count) {
-            next_tile_count = particle_count - next_base;
-        }
-        bool has_next = (t + 1 < n_tiles);
-
-        if ((t & 1) == 0) {
-            int next_ptr;
-            #pragma HLS DATAFLOW
-            next_ptr = compute_tile(cdf_buf, array_x_buf, array_y_buf, u_tile_a, xj_tile_a, yj_tile_a, particle_count, tile_count, ptr_state);
-            if (has_next) {
-                load_tile(u, u_tile_b, next_base, next_tile_count);
-            }
-            store_tile(xj, xj_tile_a, base, tile_count);
-            store_tile(yj, yj_tile_a, base, tile_count);
-            ptr_state = next_ptr;
+        if (ptr < particle_count - 1 && cdf_buf[ptr] < u_buf[j]) {
+            // CDF[ptr] too small — advance pointer
+            ptr++;
         } else {
-            int next_ptr;
-            #pragma HLS DATAFLOW
-            next_ptr = compute_tile(cdf_buf, array_x_buf, array_y_buf, u_tile_b, xj_tile_b, yj_tile_b, particle_count, tile_count, ptr_state);
-            if (has_next) {
-                load_tile(u, u_tile_a, next_base, next_tile_count);
-            }
-            store_tile(xj, xj_tile_b, base, tile_count);
-            store_tile(yj, yj_tile_b, base, tile_count);
-            ptr_state = next_ptr;
+            // CDF[ptr] >= u[j] — found the match
+            xj_buf[j] = array_x_buf[ptr];
+            yj_buf[j] = array_y_buf[ptr];
+            j++;
         }
     }
+
+    // Bulk store outputs
+    store_vector(xj, xj_buf, particle_count);
+    store_vector(yj, yj_buf, particle_count);
 }
