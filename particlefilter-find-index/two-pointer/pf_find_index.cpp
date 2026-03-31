@@ -1,5 +1,4 @@
 #include "pf_find_index.h"
-#include <hls_stream.h>
 
 // ============================================================
 // two-pointer: O(N) algorithmic optimization.
@@ -38,57 +37,6 @@ static void store_vector(data_t* dst, const data_t src[MAX_PARTICLES], int n_par
     }
 }
 
-static void load_u_stream(const data_t* src, hls::stream<data_t>& out_stream, int n_particles) {
-    #pragma HLS INLINE off
-    load_u_stream_loop: for (int i = 0; i < n_particles; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
-        #pragma HLS PIPELINE II=1
-        out_stream.write(src[i]);
-    }
-}
-
-static void compute_two_pointer_stream(
-    const data_t cdf_buf[MAX_PARTICLES],
-    const data_t array_x_buf[MAX_PARTICLES],
-    const data_t array_y_buf[MAX_PARTICLES],
-    hls::stream<data_t>& u_stream,
-    hls::stream<data_t>& xj_stream,
-    hls::stream<data_t>& yj_stream,
-    int n_particles
-) {
-    #pragma HLS INLINE off
-
-    int ptr = 0;
-    compute_stream_loop: for (int j = 0; j < n_particles; ++j) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
-        data_t value = u_stream.read();
-
-        advance_ptr_loop: while (ptr < n_particles - 1 && cdf_buf[ptr] < value) {
-            #pragma HLS LOOP_TRIPCOUNT min=0 max=16383
-            ptr++;
-        }
-
-        xj_stream.write(array_x_buf[ptr]);
-        yj_stream.write(array_y_buf[ptr]);
-    }
-}
-
-static void store_xy_stream(
-    data_t* xj,
-    data_t* yj,
-    hls::stream<data_t>& xj_stream,
-    hls::stream<data_t>& yj_stream,
-    int n_particles
-) {
-    #pragma HLS INLINE off
-    store_xy_stream_loop: for (int i = 0; i < n_particles; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
-        #pragma HLS PIPELINE II=1
-        xj[i] = xj_stream.read();
-        yj[i] = yj_stream.read();
-    }
-}
-
 extern "C" void find_index_kernel(
     const data_t* cdf,
     const data_t* u,
@@ -116,15 +64,11 @@ extern "C" void find_index_kernel(
 
     // Full-size on-chip buffers — no tiling needed for O(N) algorithm.
     data_t cdf_buf[MAX_PARTICLES];
+    data_t u_buf[MAX_PARTICLES];
     data_t array_x_buf[MAX_PARTICLES];
     data_t array_y_buf[MAX_PARTICLES];
-
-    hls::stream<data_t> u_stream;
-    hls::stream<data_t> xj_stream;
-    hls::stream<data_t> yj_stream;
-    #pragma HLS STREAM variable=u_stream depth=64
-    #pragma HLS STREAM variable=xj_stream depth=64
-    #pragma HLS STREAM variable=yj_stream depth=64
+    data_t xj_buf[MAX_PARTICLES];
+    data_t yj_buf[MAX_PARTICLES];
 
     int particle_count = n_particles;
     if (particle_count <= 0) {
@@ -136,12 +80,37 @@ extern "C" void find_index_kernel(
 
     // Bulk load all inputs to on-chip BRAM
     load_vector(cdf, cdf_buf, particle_count);
+    load_vector(u, u_buf, particle_count);
     load_vector(array_x, array_x_buf, particle_count);
     load_vector(array_y, array_y_buf, particle_count);
 
-    // Stage pipeline: load u stream -> two-pointer compute -> store outputs.
-    #pragma HLS DATAFLOW
-    load_u_stream(u, u_stream, particle_count);
-    compute_two_pointer_stream(cdf_buf, array_x_buf, array_y_buf, u_stream, xj_stream, yj_stream, particle_count);
-    store_xy_stream(xj, yj, xj_stream, yj_stream, particle_count);
+    // Two-pointer merge: single pass through both sorted arrays.
+    // ptr advances through CDF, j advances through u[].
+    // Each iteration either advances ptr or j — never both.
+    // Total iterations <= 2*N (ptr advances at most N-1, j advances exactly N).
+    // Fixed upper bound (2*16384) ensures HLS can statically bound the loop.
+    int ptr = 0;
+    int j = 0;
+    merge_loop: for (int iter = 0; iter < 2 * 16384; ++iter) {
+        #pragma HLS LOOP_TRIPCOUNT min=2 max=32768
+        #pragma HLS PIPELINE II=1
+
+        if (j >= particle_count) {
+            break;
+        }
+
+        if (ptr < particle_count - 1 && cdf_buf[ptr] < u_buf[j]) {
+            // CDF[ptr] too small — advance pointer
+            ptr++;
+        } else {
+            // CDF[ptr] >= u[j] — found the match
+            xj_buf[j] = array_x_buf[ptr];
+            yj_buf[j] = array_y_buf[ptr];
+            j++;
+        }
+    }
+
+    // Bulk store outputs
+    store_vector(xj, xj_buf, particle_count);
+    store_vector(yj, yj_buf, particle_count);
 }
