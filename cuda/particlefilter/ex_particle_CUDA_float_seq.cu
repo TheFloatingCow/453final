@@ -725,6 +725,10 @@ void particleFilter(unsigned char * I, int IszX, int IszY, int Nfr, int * seed, 
     long long send_end = get_time();
     printf("TIME TO SEND TO GPU: %f\n", elapsed_time(send_start, send_end));
     int num_blocks = ceil((double) Nparticles / (double) threads_per_block);
+    cudaEvent_t find_index_start, find_index_stop;
+    float find_index_kernel_ms_total = 0.0f;
+    check_error(cudaEventCreate(&find_index_start));
+    check_error(cudaEventCreate(&find_index_stop));
 
 
     for (k = 1; k < Nfr; k++) {
@@ -734,8 +738,15 @@ void particleFilter(unsigned char * I, int IszX, int IszY, int Nfr, int * seed, 
         sum_kernel << < num_blocks, threads_per_block >> > (partial_sums, Nparticles);
 
         normalize_weights_kernel << < num_blocks, threads_per_block >> > (weights_GPU, Nparticles, partial_sums, CDF_GPU, u_GPU, seed_GPU);
-        
+
+        check_error(cudaEventRecord(find_index_start, 0));
         find_index_kernel << < num_blocks, threads_per_block >> > (arrayX_GPU, arrayY_GPU, CDF_GPU, u_GPU, xj_GPU, yj_GPU, weights_GPU, Nparticles);
+        check_error(cudaEventRecord(find_index_stop, 0));
+        check_error(cudaEventSynchronize(find_index_stop));
+
+        float find_index_kernel_ms = 0.0f;
+        check_error(cudaEventElapsedTime(&find_index_kernel_ms, find_index_start, find_index_stop));
+        find_index_kernel_ms_total += find_index_kernel_ms;
 
     }//end loop
 
@@ -767,6 +778,10 @@ void particleFilter(unsigned char * I, int IszX, int IszY, int Nfr, int * seed, 
     printf("SEND ARRAY X BACK: %lf\n", elapsed_time(free_time, arrayX_time));
     printf("SEND ARRAY Y BACK: %lf\n", elapsed_time(arrayX_time, arrayY_time));
     printf("SEND WEIGHTS BACK: %lf\n", elapsed_time(arrayY_time, back_end_time));
+    printf("FIND_INDEX_KERNEL TOTAL: %f ms\n", find_index_kernel_ms_total);
+    if (Nfr > 1) {
+        printf("FIND_INDEX_KERNEL AVG/FRAME: %f ms\n", find_index_kernel_ms_total / (Nfr - 1));
+    }
 
     xe = 0;
     ye = 0;
@@ -784,6 +799,8 @@ void particleFilter(unsigned char * I, int IszX, int IszY, int Nfr, int * seed, 
     cudaFree(weights_GPU);
     cudaFree(arrayY_GPU);
     cudaFree(arrayX_GPU);
+    cudaEventDestroy(find_index_start);
+    cudaEventDestroy(find_index_stop);
 
     //free regular memory
     free(likelihood);
