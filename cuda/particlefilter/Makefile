@@ -1,6 +1,9 @@
 #makefile
 
-include ../../common/make.config
+-include ../../common/make.config
+
+CUDA_DIR ?= /usr/local/cuda
+CUDA_LIB_DIR ?= $(CUDA_DIR)/lib64
 
 CC := $(CUDA_DIR)/bin/nvcc
 
