@@ -1,63 +1,3 @@
-TheFloatingCow
-thefloatingcow
-Invisible
-
-sleepypanda [ORV],  — 11:55 AM
-ok so im super late but ik walking to the sub rn
-im
-TheFloatingCow — 11:55 AM
-Ok meet u there
-TheFloatingCow — 12:03 PM
-R u here
-sleepypanda [ORV],  — 12:05 PM
-yeh
-near the microwaves
-sleepypanda [ORV],  — 12:22 PM
-https://github.com/socal-ucr/Rodinia/tree/master/cuda/particlefilter
-GitHub
-Rodinia/cuda/particlefilter at master · socal-ucr/Rodinia
-Complete Rodinia benchmark suite. Contribute to socal-ucr/Rodinia development by creating an account on GitHub.
-Complete Rodinia benchmark suite. Contribute to socal-ucr/Rodinia development by creating an account on GitHub.
-PASCAL GT1080 and Volta
-CUDA_ARCH=-gencode arch=compute_61,code=sm_61 -gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80
-sleepypanda [ORV],  — 12:31 PM
-# CUDA Makefile
-
-TARGET = particle_filter
-SRC    = particle_filter.cu
-
-NVCC   = nvcc
-CFLAGS = -O2
-LDFLAGS = -lm
-
-all: $(TARGET)
-
-$(TARGET): $(SRC)
-    $(NVCC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
-
-run: $(TARGET)
-    ./$(TARGET) -x 128 -y 128 -z 10 -np 1000
-
-clean:
-    rm -f $(TARGET)
-sleepypanda [ORV],  — 1:09 PM
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <limits.h>
-#include <math.h>
-#include <unistd.h>
-
-message.txt
-26 KB
-﻿
-genuinely if i make it through this week its over for yall im gonna be insufferable
-sleepypanda
-sleepyzpanda
- 
- 
- 
-کیا آپ کبھی پلاسٹک کے تھیلے کی طرح محسوس کرتے ہیں؟
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -868,5 +808,3 @@ int main(int argc, char * argv[]) {
     free(I);
     return 0;
 }
-message.txt
-26 KB
