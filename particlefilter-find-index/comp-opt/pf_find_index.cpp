@@ -7,39 +7,48 @@
 
 static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_particles) {
     #pragma HLS INLINE off
-    load_vector_loop: for (int i = 0; i < n_particles; ++i) {
+
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
         #pragma HLS PIPELINE II=1
-        dst[i] = src[i];
+        if (i < n_particles) {
+            dst[i] = src[i];
+        }
     }
 }
 
 static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
-    load_tile_loop: for (int i = 0; i < tile_count; ++i) {
+
+    for (int i = 0; i < PARTICLE_TILE; ++i) {
         #pragma HLS PIPELINE II=1
-        dst[i] = src[base + i];
+        if (i < tile_count) {
+            dst[i] = src[base + i];
+        }
     }
 }
 
 static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
-    store_tile_loop: for (int i = 0; i < tile_count; ++i) {
+store_tile_loop:
+    for (int i = 0; i < PARTICLE_TILE; ++i) {
         #pragma HLS PIPELINE II=1
-        dst[base + i] = src[i];
+        if (i < tile_count) {
+            dst[base + i] = src[i];
+        }
     }
 }
 
-// Optimized compute: replaces the sequential break-based linear scan
-// with a reverse-scan approach that enables pipelining and parallelism.
+// Optimized compute: keeps the reverse-scan + parallel compare structure.
 //
-// Key changes from buffer version:
-//   1. CDF is cyclic-partitioned by PARALLEL_FACTOR (array partitioning)
-//   2. Inner comparison loop is fully unrolled (parallelization)
-//   3. Outer chunk loop is pipelined at II=1 (pipelining)
+// Preserved optimizations:
+//   1. CDF cyclic partitioning by PARALLEL_FACTOR
+//   2. Inner comparison loop fully unrolled
+//   3. Outer chunk loop pipelined at II=1
 //
-// The reverse scan (high-to-low) eliminates the break: every qualifying
-// cdf[idx] >= value overwrites index, and the last (lowest) write wins,
-// producing the same result as the original forward scan with break.
+// Changes made only to help HLS estimate latency:
+//   - fixed upper bound on j loop
+//   - fixed upper bound on chunk loop
+//   - guards inside loops instead of runtime loop limits
 static void compute_tile(
     const data_t cdf_buf[MAX_PARTICLES],
     const data_t array_x_buf[MAX_PARTICLES],
@@ -52,37 +61,38 @@ static void compute_tile(
 ) {
     #pragma HLS INLINE off
 
-    // Partition CDF into PARALLEL_FACTOR banks for parallel reads.
-    // Indices 0,8,16,... -> bank 0; 1,9,17,... -> bank 1; etc.
-    // Reading indices [base..base+7] hits 8 distinct banks simultaneously.
     #pragma HLS ARRAY_PARTITION variable=cdf_buf cyclic factor=8 dim=1
 
-    int num_chunks = (n_particles + PARALLEL_FACTOR - 1) / PARALLEL_FACTOR;
+    const int NUM_CHUNKS = (MAX_PARTICLES + PARALLEL_FACTOR - 1) / PARALLEL_FACTOR;
 
-    compute_tile_loop: for (int j = 0; j < tile_count; ++j) {
+
+    for (int j = 0; j < PARTICLE_TILE; ++j) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=256
-        data_t value = u_buf[j];
-        int index = n_particles - 1;
 
-        // Reverse scan: from highest chunk down to chunk 0.
-        // Within each chunk, PARALLEL_FACTOR comparisons execute in parallel.
-        find_chunk_loop: for (int c = num_chunks - 1; c >= 0; --c) {
-            #pragma HLS LOOP_TRIPCOUNT min=1 max=1024
-            #pragma HLS PIPELINE II=1
+        if (j < tile_count) {
+            data_t value = u_buf[j];
+            int index = n_particles - 1;
 
-            int base = c * PARALLEL_FACTOR;
+    
+            for (int c = NUM_CHUNKS - 1; c >= 0; --c) {
+                #pragma HLS LOOP_TRIPCOUNT min=1 max=2048
+                #pragma HLS PIPELINE II=1
 
-            search_parallel: for (int p = PARALLEL_FACTOR - 1; p >= 0; --p) {
-                #pragma HLS UNROLL
-                int idx = base + p;
-                if (idx < n_particles && cdf_buf[idx] >= value) {
-                    index = idx;
+                int base = c * PARALLEL_FACTOR;
+
+          
+                for (int p = PARALLEL_FACTOR - 1; p >= 0; --p) {
+                    #pragma HLS UNROLL
+                    int idx = base + p;
+                    if (idx < n_particles && cdf_buf[idx] >= value) {
+                        index = idx;
+                    }
                 }
             }
-        }
 
-        xj_buf[j] = array_x_buf[index];
-        yj_buf[j] = array_y_buf[index];
+            xj_buf[j] = array_x_buf[index];
+            yj_buf[j] = array_y_buf[index];
+        }
     }
 }
 
@@ -101,6 +111,7 @@ extern "C" void find_index_kernel(
     #pragma HLS INTERFACE m_axi port=array_y offset=slave bundle=gmem3 depth=16384
     #pragma HLS INTERFACE m_axi port=xj offset=slave bundle=gmem4 depth=16384
     #pragma HLS INTERFACE m_axi port=yj offset=slave bundle=gmem5 depth=16384
+
     #pragma HLS INTERFACE s_axilite port=cdf bundle=control
     #pragma HLS INTERFACE s_axilite port=u bundle=control
     #pragma HLS INTERFACE s_axilite port=array_x bundle=control
@@ -131,15 +142,24 @@ extern "C" void find_index_kernel(
     load_vector(array_x, array_x_buf, particle_count);
     load_vector(array_y, array_y_buf, particle_count);
 
-    tile_loop: for (int base = 0; base < particle_count; base += PARTICLE_TILE) {
-        int tile_count = PARTICLE_TILE;
-        if (base + tile_count > particle_count) {
-            tile_count = particle_count - base;
-        }
+    const int NUM_TILES = MAX_PARTICLES / PARTICLE_TILE;
 
-        load_tile(u, u_buf, base, tile_count);
-        compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf, xj_buf, yj_buf, particle_count, tile_count);
-        store_tile(xj, xj_buf, base, tile_count);
-        store_tile(yj, yj_buf, base, tile_count);
+
+    for (int t = 0; t < NUM_TILES; ++t) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=64
+
+        int base = t * PARTICLE_TILE;
+
+        if (base < particle_count) {
+            int tile_count = PARTICLE_TILE;
+            if (base + tile_count > particle_count) {
+                tile_count = particle_count - base;
+            }
+
+            load_tile(u, u_buf, base, tile_count);
+            compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf, xj_buf, yj_buf, particle_count, tile_count);
+            store_tile(xj, xj_buf, base, tile_count);
+            store_tile(yj, yj_buf, base, tile_count);
+        }
     }
 }
