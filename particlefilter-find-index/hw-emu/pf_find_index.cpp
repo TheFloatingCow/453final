@@ -1,16 +1,22 @@
 #include "pf_find_index.h"
 
-// Inherited from comp-opt/mem-opt: parallel factor for CDF search.
-#define PARALLEL_FACTOR 8
-
 // ============================================================
-// ping-pong: builds on mem-opt (buffer + compute + memory opt).
-// New in this version:
-//   - Double-buffered u_buf, xj_buf, yj_buf arrays (A/B copies)
-//   - #pragma HLS DATAFLOW inside the tile loop to overlap
-//     load(tile N+1) with compute(tile N) and store(tile N-1)
-//   - Uses hls::stream-free approach with ping-pong selection
-//     toggled each iteration
+// two-pointer: O(N) algorithmic optimization.
+//
+// Key insight: both CDF[] and u[] are monotonically increasing.
+//   CDF[0] <= CDF[1] <= ... <= CDF[N-1]   (cumulative weights)
+//   u[0]   <= u[1]   <= ... <= u[N-1]     (u1 + j/N)
+//
+// Instead of searching the entire CDF for each u[j] (O(N^2)),
+// we use a two-pointer merge: a single pointer into CDF that
+// only moves forward. Total work = O(N) across all particles.
+//
+// Compared to comp-opt (parallel reverse scan, O(N^2/P)):
+//   N=16384, P=8 => comp-opt ~33M iterations vs two-pointer ~32K
+//
+// Includes memory coalescing from mem-opt (max_widen_bitwidth=512).
+// No array partitioning or unrolling needed — single sequential
+// pass at II=1 is already optimal.
 // ============================================================
 
 static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_particles) {
@@ -22,62 +28,12 @@ static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_part
     }
 }
 
-static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
+static void store_vector(data_t* dst, const data_t src[MAX_PARTICLES], int n_particles) {
     #pragma HLS INLINE off
-    load_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
+    store_vector_loop: for (int i = 0; i < n_particles; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
         #pragma HLS PIPELINE II=1
-        dst[i] = src[base + i];
-    }
-}
-
-static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
-    #pragma HLS INLINE off
-    store_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
-        #pragma HLS PIPELINE II=1
-        dst[base + i] = src[i];
-    }
-}
-
-// Compute tile: inherited from comp-opt (reverse scan, partitioned CDF, pipelined).
-static void compute_tile(
-    const data_t cdf_buf[MAX_PARTICLES],
-    const data_t array_x_buf[MAX_PARTICLES],
-    const data_t array_y_buf[MAX_PARTICLES],
-    const data_t u_buf[PARTICLE_TILE],
-    data_t xj_buf[PARTICLE_TILE],
-    data_t yj_buf[PARTICLE_TILE],
-    int n_particles,
-    int tile_count
-) {
-    #pragma HLS INLINE off
-    #pragma HLS ARRAY_PARTITION variable=cdf_buf cyclic factor=8 dim=1
-
-    int num_chunks = (n_particles + PARALLEL_FACTOR - 1) / PARALLEL_FACTOR;
-
-    compute_tile_loop: for (int j = 0; j < tile_count; ++j) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
-        data_t value = u_buf[j];
-        int index = n_particles - 1;
-
-        find_chunk_loop: for (int c = num_chunks - 1; c >= 0; --c) {
-            #pragma HLS LOOP_TRIPCOUNT min=1 max=2048
-            #pragma HLS PIPELINE II=1
-
-            int base = c * PARALLEL_FACTOR;
-
-            search_parallel: for (int p = PARALLEL_FACTOR - 1; p >= 0; --p) {
-                #pragma HLS UNROLL
-                int idx = base + p;
-                if (idx < n_particles && cdf_buf[idx] >= value) {
-                    index = idx;
-                }
-            }
-        }
-
-        xj_buf[j] = array_x_buf[index];
-        yj_buf[j] = array_y_buf[index];
+        dst[i] = src[i];
     }
 }
 
@@ -106,20 +62,13 @@ extern "C" void find_index_kernel(
     #pragma HLS INTERFACE s_axilite port=n_particles bundle=control
     #pragma HLS INTERFACE s_axilite port=return bundle=control
 
+    // Full-size on-chip buffers — no tiling needed for O(N) algorithm.
     data_t cdf_buf[MAX_PARTICLES];
-    #pragma HLS ARRAY_PARTITION variable=cdf_buf cyclic factor=8 dim=1
-
+    data_t u_buf[MAX_PARTICLES];
     data_t array_x_buf[MAX_PARTICLES];
     data_t array_y_buf[MAX_PARTICLES];
-
-    // Ping-pong double buffers for tile data.
-    // While compute uses buffer A, load fills buffer B (and vice versa).
-    data_t u_buf_A[PARTICLE_TILE];
-    data_t u_buf_B[PARTICLE_TILE];
-    data_t xj_buf_A[PARTICLE_TILE];
-    data_t xj_buf_B[PARTICLE_TILE];
-    data_t yj_buf_A[PARTICLE_TILE];
-    data_t yj_buf_B[PARTICLE_TILE];
+    data_t xj_buf[MAX_PARTICLES];
+    data_t yj_buf[MAX_PARTICLES];
 
     int particle_count = n_particles;
     if (particle_count <= 0) {
@@ -129,57 +78,37 @@ extern "C" void find_index_kernel(
         particle_count = MAX_PARTICLES;
     }
 
+    // Bulk load all inputs to on-chip BRAM
     load_vector(cdf, cdf_buf, particle_count);
+    load_vector(u, u_buf, particle_count);
     load_vector(array_x, array_x_buf, particle_count);
     load_vector(array_y, array_y_buf, particle_count);
 
-    int n_tiles = (particle_count + PARTICLE_TILE - 1) / PARTICLE_TILE;
+    // Two-pointer merge: single pass through both sorted arrays.
+    // ptr advances through CDF, j advances through u[].
+    // Each iteration either advances ptr or j — never both.
+    // Total iterations <= 2*N (ptr advances at most N-1, j advances exactly N).
+    // Fixed upper bound (2*16384) ensures HLS can statically bound the loop.
+    int ptr = 0;
+    int j = 0;
+    merge_loop: for (int iter = 0; iter < 2 * 16384; ++iter) {
+        #pragma HLS LOOP_TRIPCOUNT min=2 max=32768
+        #pragma HLS PIPELINE II=1
 
-    // Prologue: load first tile into buffer A
-    {
-        int tile_count = PARTICLE_TILE;
-        if (tile_count > particle_count) {
-            tile_count = particle_count;
+        if (j < particle_count) {
+            if (ptr < particle_count - 1 && cdf_buf[ptr] < u_buf[j]) {
+                // CDF[ptr] too small — advance pointer
+                ptr++;
+            } else {
+                // CDF[ptr] >= u[j] — found the match
+                xj_buf[j] = array_x_buf[ptr];
+                yj_buf[j] = array_y_buf[ptr];
+                j++;
+            }
         }
-        load_tile(u, u_buf_A, 0, tile_count);
     }
 
-    // Main loop: overlap load(next) + compute(current) + store(prev)
-    // using ping-pong buffers and DATAFLOW.
-    tile_loop: for (int t = 0; t < n_tiles; ++t) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=64
-
-        int base = t * PARTICLE_TILE;
-        int tile_count = PARTICLE_TILE;
-        if (base + tile_count > particle_count) {
-            tile_count = particle_count - base;
-        }
-
-        int next_base = (t + 1) * PARTICLE_TILE;
-        int next_tile_count = PARTICLE_TILE;
-        if (next_base + next_tile_count > particle_count) {
-            next_tile_count = particle_count - next_base;
-        }
-        bool has_next = (t + 1 < n_tiles);
-
-        if ((t & 1) == 0) {
-            // Even iteration: compute on A, load next into B
-            #pragma HLS DATAFLOW
-            compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf_A, xj_buf_A, yj_buf_A, particle_count, tile_count);
-            if (has_next) {
-                load_tile(u, u_buf_B, next_base, next_tile_count);
-            }
-            store_tile(xj, xj_buf_A, base, tile_count);
-            store_tile(yj, yj_buf_A, base, tile_count);
-        } else {
-            // Odd iteration: compute on B, load next into A
-            #pragma HLS DATAFLOW
-            compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf_B, xj_buf_B, yj_buf_B, particle_count, tile_count);
-            if (has_next) {
-                load_tile(u, u_buf_A, next_base, next_tile_count);
-            }
-            store_tile(xj, xj_buf_B, base, tile_count);
-            store_tile(yj, yj_buf_B, base, tile_count);
-        }
-    }
+    // Bulk store outputs
+    store_vector(xj, xj_buf, particle_count);
+    store_vector(yj, yj_buf, particle_count);
 }
