@@ -41,13 +41,11 @@ static void load_vector_wide(
 
     int num_words = (n_particles + WORD_ELEMS - 1) / WORD_ELEMS;
 
-
     for (int w = 0; w < num_words; ++w) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=2048
         #pragma HLS PIPELINE II=1
 
         bus_t word = src[w];
-
 
         for (int k = 0; k < WORD_ELEMS; ++k) {
             #pragma HLS UNROLL
@@ -71,13 +69,11 @@ static void load_tile_wide(
     int start_word = base / WORD_ELEMS;
     int end_word   = (base + tile_count - 1) / WORD_ELEMS;
 
-
     for (int w = start_word; w <= end_word; ++w) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=32
         #pragma HLS PIPELINE II=1
 
         bus_t word = src[w];
-
 
         for (int k = 0; k < WORD_ELEMS; ++k) {
             #pragma HLS UNROLL
@@ -103,13 +99,11 @@ static void store_tile_wide(
     int start_word = base / WORD_ELEMS;
     int end_word   = (base + tile_count - 1) / WORD_ELEMS;
 
-  
     for (int w = start_word; w <= end_word; ++w) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=32
         #pragma HLS PIPELINE II=1
 
         bus_t word = 0;
-
 
         for (int k = 0; k < WORD_ELEMS; ++k) {
             #pragma HLS UNROLL
@@ -146,7 +140,6 @@ static void compute_tile(
 
     int num_chunks = (n_particles + PARALLEL_FACTOR - 1) / PARALLEL_FACTOR;
 
-
     for (int j = 0; j < tile_count; ++j) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=256
 
@@ -177,6 +170,11 @@ static void compute_tile(
 
 // ============================================================
 // Top kernel with real 512-bit AXI ports
+// New in this version:
+//   - Double-buffered u_buf, xj_buf, yj_buf arrays (A/B copies)
+//   - #pragma HLS DATAFLOW inside the tile loop to overlap
+//     load(tile N+1) with compute(tile N) and store(tile N-1)
+//   - Ping-pong selection toggled each iteration via (t & 1)
 // ============================================================
 extern "C" void find_index_kernel(
     const bus_t* cdf,
@@ -208,9 +206,15 @@ extern "C" void find_index_kernel(
 
     data_t array_x_buf[MAX_PARTICLES];
     data_t array_y_buf[MAX_PARTICLES];
-    data_t u_buf[PARTICLE_TILE];
-    data_t xj_buf[PARTICLE_TILE];
-    data_t yj_buf[PARTICLE_TILE];
+
+    // Ping-pong double buffers for tile data.
+    // While compute uses buffer A, load fills buffer B (and vice versa).
+    data_t u_buf_A[PARTICLE_TILE];
+    data_t u_buf_B[PARTICLE_TILE];
+    data_t xj_buf_A[PARTICLE_TILE];
+    data_t xj_buf_B[PARTICLE_TILE];
+    data_t yj_buf_A[PARTICLE_TILE];
+    data_t yj_buf_B[PARTICLE_TILE];
 
     int particle_count = n_particles;
     if (particle_count <= 0) {
@@ -224,16 +228,53 @@ extern "C" void find_index_kernel(
     load_vector_wide(array_x, array_x_buf, particle_count);
     load_vector_wide(array_y, array_y_buf, particle_count);
 
+    int n_tiles = (particle_count + PARTICLE_TILE - 1) / PARTICLE_TILE;
 
-    for (int base = 0; base < particle_count; base += PARTICLE_TILE) {
+    // Prologue: load first tile into buffer A
+    {
+        int tile_count = PARTICLE_TILE;
+        if (tile_count > particle_count) {
+            tile_count = particle_count;
+        }
+        load_tile_wide(u, u_buf_A, 0, tile_count);
+    }
+
+    // Main loop: overlap load(next) + compute(current) + store(prev)
+    // using ping-pong buffers and DATAFLOW.
+    tile_loop: for (int t = 0; t < n_tiles; ++t) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=64
+
+        int base = t * PARTICLE_TILE;
         int tile_count = PARTICLE_TILE;
         if (base + tile_count > particle_count) {
             tile_count = particle_count - base;
         }
 
-        load_tile_wide(u, u_buf, base, tile_count);
-        compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf, xj_buf, yj_buf, particle_count, tile_count);
-        store_tile_wide(xj, xj_buf, base, tile_count);
-        store_tile_wide(yj, yj_buf, base, tile_count);
+        int next_base = (t + 1) * PARTICLE_TILE;
+        int next_tile_count = PARTICLE_TILE;
+        if (next_base + next_tile_count > particle_count) {
+            next_tile_count = particle_count - next_base;
+        }
+        bool has_next = (t + 1 < n_tiles);
+
+        if ((t & 1) == 0) {
+            // Even iteration: compute on A, load next into B
+            #pragma HLS DATAFLOW
+            compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf_A, xj_buf_A, yj_buf_A, particle_count, tile_count);
+            if (has_next) {
+                load_tile_wide(u, u_buf_B, next_base, next_tile_count);
+            }
+            store_tile_wide(xj, xj_buf_A, base, tile_count);
+            store_tile_wide(yj, yj_buf_A, base, tile_count);
+        } else {
+            // Odd iteration: compute on B, load next into A
+            #pragma HLS DATAFLOW
+            compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf_B, xj_buf_B, yj_buf_B, particle_count, tile_count);
+            if (has_next) {
+                load_tile_wide(u, u_buf_A, next_base, next_tile_count);
+            }
+            store_tile_wide(xj, xj_buf_B, base, tile_count);
+            store_tile_wide(yj, yj_buf_B, base, tile_count);
+        }
     }
 }
