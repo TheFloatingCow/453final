@@ -3,6 +3,7 @@
 static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_particles) {
     #pragma HLS INLINE off
     load_vector_loop: for (int i = 0; i < n_particles; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
         #pragma HLS PIPELINE II=1
         dst[i] = src[i];
     }
@@ -11,6 +12,7 @@ static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_part
 static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
     load_tile_loop: for (int i = 0; i < tile_count; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
         #pragma HLS PIPELINE II=1
         dst[i] = src[base + i];
     }
@@ -19,6 +21,7 @@ static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, in
 static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
     store_tile_loop: for (int i = 0; i < tile_count; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
         #pragma HLS PIPELINE II=1
         dst[base + i] = src[i];
     }
@@ -29,6 +32,7 @@ static int find_first_geq(const data_t cdf[MAX_PARTICLES], int n_particles, data
     int index = n_particles - 1;
 
     find_index_loop: for (int i = 0; i < n_particles; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
         if (cdf[i] >= value) {
             index = i;
             break;
@@ -51,6 +55,7 @@ static void compute_tile(
     #pragma HLS INLINE off
 
     compute_tile_loop: for (int j = 0; j < tile_count; ++j) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
         int index = find_first_geq(cdf_buf, n_particles, u_buf[j]);
         xj_buf[j] = array_x_buf[index];
         yj_buf[j] = array_y_buf[index];

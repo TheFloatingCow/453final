@@ -8,6 +8,7 @@
 static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_particles) {
     #pragma HLS INLINE off
     load_vector_loop: for (int i = 0; i < n_particles; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
         #pragma HLS PIPELINE II=1
         dst[i] = src[i];
     }
@@ -16,6 +17,7 @@ static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_part
 static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
     load_tile_loop: for (int i = 0; i < tile_count; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
         #pragma HLS PIPELINE II=1
         dst[i] = src[base + i];
     }
@@ -24,6 +26,7 @@ static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, in
 static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
     #pragma HLS INLINE off
     store_tile_loop: for (int i = 0; i < tile_count; ++i) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
         #pragma HLS PIPELINE II=1
         dst[base + i] = src[i];
     }
