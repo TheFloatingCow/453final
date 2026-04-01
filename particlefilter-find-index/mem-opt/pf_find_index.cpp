@@ -1,6 +1,5 @@
 #include "pf_find_index.h"
 #include <ap_int.h>
-#include <stdint.h>
 
 #define PARALLEL_FACTOR 8
 #define BUS_WIDTH_BITS 512
@@ -13,16 +12,16 @@ typedef ap_uint<BUS_WIDTH_BITS> bus_t;
 // ============================================================
 static data_t bits_to_double(ap_uint<64> bits) {
     union {
-        uint64_t u;
+        unsigned long long u;
         data_t d;
     } conv;
-    conv.u = (uint64_t)bits;
+    conv.u = (unsigned long long)bits;
     return conv.d;
 }
 
 static ap_uint<64> double_to_bits(data_t val) {
     union {
-        uint64_t u;
+        unsigned long long u;
         data_t d;
     } conv;
     conv.d = val;

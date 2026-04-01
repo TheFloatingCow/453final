@@ -16,7 +16,7 @@ static bus_t pack_word(const data_t* src, int base, int n_valid) {
 
     for (int k = 0; k < WORD_ELEMS; ++k) {
         union {
-            uint64_t u;
+            unsigned long long u;
             data_t d;
         } conv;
 
@@ -36,11 +36,11 @@ static void unpack_word(bus_t word, data_t* dst, int base, int n_valid) {
     for (int k = 0; k < WORD_ELEMS; ++k) {
         if (k < n_valid) {
             union {
-                uint64_t u;
+                unsigned long long u;
                 data_t d;
             } conv;
 
-            conv.u = (uint64_t)word.range((k + 1) * 64 - 1, k * 64);
+            conv.u = (unsigned long long)word.range((k + 1) * 64 - 1, k * 64);
             dst[base + k] = conv.d;
         }
     }
