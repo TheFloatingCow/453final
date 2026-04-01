@@ -114,20 +114,10 @@ static int run_case(int n_particles, int trial_seed) {
         if (std::fabs(xj_hw[i] - xj_sw[i]) > 1e-9 || std::fabs(yj_hw[i] - yj_sw[i]) > 1e-9) {
             ++errors;
             if (errors < 6) {
-                std::printf(
-                    "Mismatch n=%d seed=%d idx=%d: expected (%0.6f, %0.6f), got (%0.6f, %0.6f)\n",
-                    n_particles,
-                    trial_seed,
-                    i,
-                    xj_sw[i],
-                    yj_sw[i],
-                    xj_hw[i],
-                    yj_hw[i]
-                );
+                std::printf("Mismatch n=%d seed=%d idx=%d: expected (%0.6f, %0.6f), got (%0.6f, %0.6f)\n", n_particles, trial_seed, i, xj_sw[i], yj_sw[i], xj_hw[i], yj_hw[i]);
             }
         }
     }
-
     return errors;
 }
 

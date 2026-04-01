@@ -1,0 +1,76 @@
+jpcarino@ensc-mmc-15:~/Desktop/particlefilter-find-index/hw-run$ ./pf build_dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin
+HOST: n_particles=16384 num_frames=10000 (hw-run performance)
+Running CPU golden reference...
+CPU reference done.
+Found Platform
+Platform Name: Xilinx
+Found device: xilinx_u50_gen3x16_xdma_201920_3
+INFO: Reading build_dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin
+Loading: 'build_dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin'
+Transferring data to FPGA
+Running single verification pass...
+Verification PASSED.
+Running 10000 kernel invocations for timing...
+============================================
+*** TEST PASSED ***
+n_particles:       16384
+num_frames:        10000
+Total kernel time: 33820.7 ms
+Per-call time:     3.38207 ms
+Throughput:        295.677 frames/sec
+============================================
+jpcarino@ensc-mmc-15:~/Desktop/particlefilter-find-index/hw-run$ cat _x.hw.xilinx_u50_gen3x16_xdma_201920_3/reports/link/system_estimate_pf_krl.link.xtxt
+===============================================================================
+Version:    v++ v2020.2.2 (64-bit)
+Build:      SW Build (by xbuild) on 2021-02-09-04:49:36
+Copyright:  Copyright 1986-2020 Xilinx, Inc. All Rights Reserved.
+Created:    Tue Mar 31 20:05:12 2026
+===============================================================================
+
+Kernel Summary
+Kernel Name        Type  Target              OpenCL Library  Compute Units
+-----------------  ----  ------------------  --------------  -------------
+find_index_kernel  c     fpga0:OCL_REGION_0  pf_krl.link     1
+
+Kernel Summary
+Kernel Name        Type  Target              OpenCL Library  Compute Units
+-----------------  ----  ------------------  --------------  -------------
+find_index_kernel  c     fpga0:OCL_REGION_0  pf_krl.link     1
+
+Kernel Summary
+Kernel Name        Type  Target              OpenCL Library  Compute Units
+-----------------  ----  ------------------  --------------  -------------
+find_index_kernel  c     fpga0:OCL_REGION_0  pf_krl.link     1
+
+
+-------------------------------------------------------------------------------
+OpenCL Binary:     pf_krl.link
+Kernels mapped to: clc_region
+
+Timing Information (MHz)
+Compute Unit         Kernel Name        Module Name        Target Frequency  Estimated Frequency
+-------------------  -----------------  -----------------  ----------------  -------------------
+find_index_kernel_1  find_index_kernel  load_vector        300.300293        411.015198
+find_index_kernel_1  find_index_kernel  load_tile          300.300293        411.015198
+find_index_kernel_1  find_index_kernel  compute_tile       300.300293        188.323914
+find_index_kernel_1  find_index_kernel  store_tile         300.300293        411.015198
+find_index_kernel_1  find_index_kernel  find_index_kernel  300.300293        188.323914
+
+Latency Information
+Compute Unit         Kernel Name        Module Name        Start Interval  Best (cycles)  Avg (cycles)  Worst (cycles)  Best (absolute)  Avg (absolute)  Worst (absolute)
+-------------------  -----------------  -----------------  --------------  -------------  ------------  --------------  ---------------  --------------  ----------------
+find_index_kernel_1  find_index_kernel  load_vector        73 ~ 16456      73             8264          16456           0.243 us         27.544 us       54.848 us   
+find_index_kernel_1  find_index_kernel  load_tile          1 ~ 329         1              101           329             3.333 ns         0.337 us        1.097 us    
+find_index_kernel_1  find_index_kernel  compute_tile       46 ~ 10756      46             5380          10756           0.244 us         28.568 us       57.114 us   
+find_index_kernel_1  find_index_kernel  store_tile         1 ~ 327         1              100           327             3.333 ns         0.333 us        1.090 us    
+find_index_kernel_1  find_index_kernel  find_index_kernel  3 ~ 747149      2              92711         747148          10.620 ns        0.492 ms        3.967 ms    
+
+Area Information
+Compute Unit         Kernel Name        Module Name        FF    LUT   DSP  BRAM  URAM
+-------------------  -----------------  -----------------  ----  ----  ---  ----  ----
+find_index_kernel_1  find_index_kernel  load_vector        186   435   0    0     0
+find_index_kernel_1  find_index_kernel  load_tile          276   519   0    0     0
+find_index_kernel_1  find_index_kernel  compute_tile       428   675   0    0     0
+find_index_kernel_1  find_index_kernel  store_tile         264   515   0    0     0
+find_index_kernel_1  find_index_kernel  find_index_kernel  6235  9931  0    132   0
+-------------------------------------------------------------------------------

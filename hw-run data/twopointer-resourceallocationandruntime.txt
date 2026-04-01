@@ -1,0 +1,54 @@
+jpcarino@ensc-mmc-15:~/Desktop/particlefilter-find-index/two-pointer/hw-run$ ./pf build dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin
+HOST: n_particles=16384 num_frames=10000 (hw-run performance)
+Running CPU golden reference...
+CPU reference done.
+Found Platform
+Platform Name: Xilinx
+Found device: xilinx_u50_gen3x16_xdma_201920_3
+INFO: Reading build_dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin
+Loading: 'build_dir.hw.xilinx_u50_gen3x16_xdma_201920_3/pf_krl.xclbin'
+Transferring data to FPGA
+Running single verification pass...
+Verification PASSED.
+Running 10000 kernel invocations for timing...
+============================================
+*** TEST PASSED ***
+n_particles:       16384
+num_frames:        10000
+Total kernel time: 7996.17 ms
+Per-call time:     0.799618 ms
+Throughput:        1250.6 frames/sec
+============================================
+jpcarino@ensc-mmc-15:~/Desktop/particlefilter-find-index/two-pointer/hw-run$ cat _x.hw.xilinx_u50_gen3x16_xdma_201920_3/reports/link/system_estimate_pf_krl.link.xtxt
+===============================================================================    
+Version:    v++ v2020.2.2 (64-bit)
+Build:      SW Build (by xbuild) on 2021-02-09-04:49:36
+Copyright:  Copyright 1986-2020 Xilinx, Inc. All Rights Reserved.
+Created:    Tue Mar 31 00:12:08 2026
+===============================================================================    
+
+-------------------------------------------------------------------------------    
+Design Name:             pf_krl
+Target Device:           xilinx:u50:gen3x16_xdma:201920.3
+Target Clock:            300.000000MHz
+Total number of kernels: 1
+-------------------------------------------------------------------------------    
+
+Kernel Summary
+Compute Unit         Kernel Name        Module Name        Target Frequency  Estimated Frequency
+-------------------  -----------------  -----------------  ----------------  -------------------
+find_index_kernel_1  find_index_kernel  load_vector        300.300293        411.015198
+find_index_kernel_1  find_index_kernel  store_vector       300.300293        411.015198
+find_index_kernel_1  find_index_kernel  find_index_kernel  300.300293        336.247467
+
+Latency Information
+Compute Unit         Kernel Name        Module Name        Start Interval  Best (cycles)  Avg (cycles)  Worst (cycles)  Best (absolute)  Avg (absolute)  Worst (absolute)
+-------------------  -----------------  -----------------  --------------  -------------  ------------  --------------  ---------------  --------------  ----------------
+find_index_kernel_1  find_index_kernel  load_vector        73 ~ 16456      73             8264          16456           0.243 us         27.544 us       54.848 us
+find_index_kernel_1  find_index_kernel  store_vector       72 ~ 16455      72             8263          16455           0.240 us         27.541 us       54.845 us
+find_index_kernel_1  find_index_kernel  find_index_kernel  2 ~ 131223      1              57420         131222          3.333 ns         0.191 ms        0.437 ms
+
+Area Information
+Compute Unit         Kernel Name        Module Name        FF    LUT   DSP  BRAM  URAM
+-------------------  -----------------  -----------------  ----  ----  ---  ----  ----
+find_index_kernel_1  find_index_kernel  load_vector        186   435   0    0     0find_index_kernel_1  find_index_kernel  store_vector       218   454   0    0     0find_index_kernel_1  find_index_kernel  find_index_kernel  5725  8891  0    216   0-------------------------------------------------------------------------------

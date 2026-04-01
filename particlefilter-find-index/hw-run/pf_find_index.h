@@ -10,15 +10,7 @@ typedef double data_t;
 extern "C" {
 #endif
 
-void find_index_kernel(
-    const data_t* cdf,
-    const data_t* u,
-    const data_t* array_x,
-    const data_t* array_y,
-    data_t* xj,
-    data_t* yj,
-    int n_particles
-);
+void find_index_kernel(const data_t* cdf, const data_t* u, const data_t* array_x, const data_t* array_y, data_t* xj, data_t* yj, int n_particles);
 
 #ifdef __cplusplus
 }
