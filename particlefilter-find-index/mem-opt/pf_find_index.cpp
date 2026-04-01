@@ -1,47 +1,137 @@
 #include "pf_find_index.h"
+#include <ap_int.h>
+#include <stdint.h>
 
-// Inherited from comp-opt: parallel factor for CDF search.
 #define PARALLEL_FACTOR 8
+#define BUS_WIDTH_BITS 512
+#define WORD_ELEMS 8
+
+typedef ap_uint<BUS_WIDTH_BITS> bus_t;
 
 // ============================================================
-// mem-opt: builds on comp-opt (buffer + compute optimization).
-// New in this version:
-//   - max_widen_bitwidth=512 on all m_axi ports enables the
-//     AXI interface to widen 64-bit doubles to 512-bit bus
-//     transfers (8 doubles per beat), improving memory
-//     coalescing and burst efficiency.
-//   - Fixed upper-bound loop trips for load/store to help
-//     HLS infer optimal burst lengths.
+// Bit conversion helpers
 // ============================================================
+static data_t bits_to_double(ap_uint<64> bits) {
+    union {
+        uint64_t u;
+        data_t d;
+    } conv;
+    conv.u = (uint64_t)bits;
+    return conv.d;
+}
 
-static void load_vector(const data_t* src, data_t dst[MAX_PARTICLES], int n_particles) {
+static ap_uint<64> double_to_bits(data_t val) {
+    union {
+        uint64_t u;
+        data_t d;
+    } conv;
+    conv.d = val;
+    return (ap_uint<64>)conv.u;
+}
+
+// ============================================================
+// Wide AXI load/store helpers
+// Each 512-bit word holds 8 doubles.
+// ============================================================
+static void load_vector_wide(
+    const bus_t* src,
+    data_t dst[MAX_PARTICLES],
+    int n_particles
+) {
     #pragma HLS INLINE off
-    load_vector_loop: for (int i = 0; i < n_particles; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=16384
+
+    int num_words = (n_particles + WORD_ELEMS - 1) / WORD_ELEMS;
+
+
+    for (int w = 0; w < num_words; ++w) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=2048
         #pragma HLS PIPELINE II=1
-        dst[i] = src[i];
+
+        bus_t word = src[w];
+
+
+        for (int k = 0; k < WORD_ELEMS; ++k) {
+            #pragma HLS UNROLL
+            int idx = w * WORD_ELEMS + k;
+            if (idx < n_particles) {
+                ap_uint<64> bits = word.range((k + 1) * 64 - 1, k * 64);
+                dst[idx] = bits_to_double(bits);
+            }
+        }
     }
 }
 
-static void load_tile(const data_t* src, data_t dst[PARTICLE_TILE], int base, int tile_count) {
+static void load_tile_wide(
+    const bus_t* src,
+    data_t dst[PARTICLE_TILE],
+    int base,
+    int tile_count
+) {
     #pragma HLS INLINE off
-    load_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
+
+    int start_word = base / WORD_ELEMS;
+    int end_word   = (base + tile_count - 1) / WORD_ELEMS;
+
+
+    for (int w = start_word; w <= end_word; ++w) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=32
         #pragma HLS PIPELINE II=1
-        dst[i] = src[base + i];
+
+        bus_t word = src[w];
+
+
+        for (int k = 0; k < WORD_ELEMS; ++k) {
+            #pragma HLS UNROLL
+            int global_idx = w * WORD_ELEMS + k;
+            int local_idx = global_idx - base;
+
+            if (local_idx >= 0 && local_idx < tile_count) {
+                ap_uint<64> bits = word.range((k + 1) * 64 - 1, k * 64);
+                dst[local_idx] = bits_to_double(bits);
+            }
+        }
     }
 }
 
-static void store_tile(data_t* dst, const data_t src[PARTICLE_TILE], int base, int tile_count) {
+static void store_tile_wide(
+    bus_t* dst,
+    const data_t src[PARTICLE_TILE],
+    int base,
+    int tile_count
+) {
     #pragma HLS INLINE off
-    store_tile_loop: for (int i = 0; i < tile_count; ++i) {
-        #pragma HLS LOOP_TRIPCOUNT min=1 max=256
+
+    int start_word = base / WORD_ELEMS;
+    int end_word   = (base + tile_count - 1) / WORD_ELEMS;
+
+  
+    for (int w = start_word; w <= end_word; ++w) {
+        #pragma HLS LOOP_TRIPCOUNT min=1 max=32
         #pragma HLS PIPELINE II=1
-        dst[base + i] = src[i];
+
+        bus_t word = 0;
+
+
+        for (int k = 0; k < WORD_ELEMS; ++k) {
+            #pragma HLS UNROLL
+            int global_idx = w * WORD_ELEMS + k;
+            int local_idx = global_idx - base;
+
+            ap_uint<64> bits = 0;
+            if (local_idx >= 0 && local_idx < tile_count) {
+                bits = double_to_bits(src[local_idx]);
+            }
+
+            word.range((k + 1) * 64 - 1, k * 64) = bits;
+        }
+
+        dst[w] = word;
     }
 }
 
-// Compute tile: inherited from comp-opt (reverse scan, partitioned CDF, pipelined).
+// ============================================================
+// Compute tile: unchanged algorithmically
+// ============================================================
 static void compute_tile(
     const data_t cdf_buf[MAX_PARTICLES],
     const data_t array_x_buf[MAX_PARTICLES],
@@ -57,20 +147,24 @@ static void compute_tile(
 
     int num_chunks = (n_particles + PARALLEL_FACTOR - 1) / PARALLEL_FACTOR;
 
-    compute_tile_loop: for (int j = 0; j < tile_count; ++j) {
+
+    for (int j = 0; j < tile_count; ++j) {
         #pragma HLS LOOP_TRIPCOUNT min=1 max=256
+
         data_t value = u_buf[j];
         int index = n_particles - 1;
 
-        find_chunk_loop: for (int c = num_chunks - 1; c >= 0; --c) {
+        find_chunk_loop:
+        for (int c = num_chunks - 1; c >= 0; --c) {
             #pragma HLS LOOP_TRIPCOUNT min=1 max=2048
             #pragma HLS PIPELINE II=1
 
-            int base = c * PARALLEL_FACTOR;
+            int base_idx = c * PARALLEL_FACTOR;
 
-            search_parallel: for (int p = PARALLEL_FACTOR - 1; p >= 0; --p) {
+            search_parallel:
+            for (int p = PARALLEL_FACTOR - 1; p >= 0; --p) {
                 #pragma HLS UNROLL
-                int idx = base + p;
+                int idx = base_idx + p;
                 if (idx < n_particles && cdf_buf[idx] >= value) {
                     index = idx;
                 }
@@ -82,25 +176,25 @@ static void compute_tile(
     }
 }
 
+// ============================================================
+// Top kernel with real 512-bit AXI ports
+// ============================================================
 extern "C" void find_index_kernel(
-    const data_t* cdf,
-    const data_t* u,
-    const data_t* array_x,
-    const data_t* array_y,
-    data_t* xj,
-    data_t* yj,
+    const bus_t* cdf,
+    const bus_t* u,
+    const bus_t* array_x,
+    const bus_t* array_y,
+    bus_t* xj,
+    bus_t* yj,
     int n_particles
 ) {
-    // Memory coalescing: max_widen_bitwidth=512 widens the AXI data bus
-    // from 64 bits (1 double) to 512 bits (8 doubles per beat).
-    // Combined with sequential access in load/store, this enables
-    // efficient burst transfers and reduces total memory transactions.
-    #pragma HLS INTERFACE m_axi port=cdf offset=slave bundle=gmem0 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=u offset=slave bundle=gmem1 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=array_x offset=slave bundle=gmem2 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=array_y offset=slave bundle=gmem3 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=xj offset=slave bundle=gmem4 depth=16384 max_widen_bitwidth=512
-    #pragma HLS INTERFACE m_axi port=yj offset=slave bundle=gmem5 depth=16384 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=cdf     offset=slave bundle=gmem0 depth=2048 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=u       offset=slave bundle=gmem1 depth=2048 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=array_x offset=slave bundle=gmem2 depth=2048 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=array_y offset=slave bundle=gmem3 depth=2048 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=xj      offset=slave bundle=gmem4 depth=2048 max_widen_bitwidth=512
+    #pragma HLS INTERFACE m_axi port=yj      offset=slave bundle=gmem5 depth=2048 max_widen_bitwidth=512
+
     #pragma HLS INTERFACE s_axilite port=cdf bundle=control
     #pragma HLS INTERFACE s_axilite port=u bundle=control
     #pragma HLS INTERFACE s_axilite port=array_x bundle=control
@@ -127,19 +221,20 @@ extern "C" void find_index_kernel(
         particle_count = MAX_PARTICLES;
     }
 
-    load_vector(cdf, cdf_buf, particle_count);
-    load_vector(array_x, array_x_buf, particle_count);
-    load_vector(array_y, array_y_buf, particle_count);
+    load_vector_wide(cdf, cdf_buf, particle_count);
+    load_vector_wide(array_x, array_x_buf, particle_count);
+    load_vector_wide(array_y, array_y_buf, particle_count);
 
-    tile_loop: for (int base = 0; base < particle_count; base += PARTICLE_TILE) {
+
+    for (int base = 0; base < particle_count; base += PARTICLE_TILE) {
         int tile_count = PARTICLE_TILE;
         if (base + tile_count > particle_count) {
             tile_count = particle_count - base;
         }
 
-        load_tile(u, u_buf, base, tile_count);
+        load_tile_wide(u, u_buf, base, tile_count);
         compute_tile(cdf_buf, array_x_buf, array_y_buf, u_buf, xj_buf, yj_buf, particle_count, tile_count);
-        store_tile(xj, xj_buf, base, tile_count);
-        store_tile(yj, yj_buf, base, tile_count);
+        store_tile_wide(xj, xj_buf, base, tile_count);
+        store_tile_wide(yj, yj_buf, base, tile_count);
     }
 }
