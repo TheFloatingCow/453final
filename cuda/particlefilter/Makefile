@@ -1,18 +1,19 @@
-#makefile
+# CUDA Makefile
 
-include ../../common/make.config
+TARGET = particle_filter
+SRC    = ex_particle_CUDA_float_seq.cu
 
-CC := $(CUDA_DIR)/bin/nvcc
+NVCC   = nvcc
+CFLAGS = -O2
+LDFLAGS = -lm
 
-INCLUDE := $(CUDA_DIR)/include
+all: $(TARGET)
 
-all: naive float
+$(TARGET): $(SRC)
+	$(NVCC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
-naive: ex_particle_CUDA_naive_seq.cu
-	$(CC) -I$(INCLUDE) -L$(CUDA_LIB_DIR) -lcuda -g -lm -O3 -use_fast_math -arch sm_13 ex_particle_CUDA_naive_seq.cu -o particlefilter_naive
-	
-float: ex_particle_CUDA_float_seq.cu
-	$(CC) -I$(INCLUDE) -L$(CUDA_LIB_DIR) -lcuda -g -lm -O3 -use_fast_math -arch sm_13 ex_particle_CUDA_float_seq.cu -o particlefilter_float
+run: $(TARGET)
+	./$(TARGET) -x 128 -y 128 -z 10 -np 1000
 
 clean:
-	rm particlefilter_naive particlefilter_float
+	rm -f $(TARGET)
