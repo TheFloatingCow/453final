@@ -340,7 +340,7 @@ int findIndexBin(double * CDF, int beginIndex, int endIndex, double value){
 * @param seed The seed array used for random number generation
 * @param Nparticles The number of particles to be used
 */
-void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparticles){
+double particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparticles){
 	
 	int max_size = IszX*IszY*Nfr;
 	long long start = get_time();
@@ -510,7 +510,8 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 		long long reset = get_time();
 		printf("TIME TO RESET WEIGHTS TOOK: %f\n", elapsed_time(xyj_time, reset));
 	}
-	printf("TOTAL FIND INDEX KERNEL TIME: %f\n", ((double)total_find_index_us) / (1000.0 * 1000.0));
+	double total_find_index_s = ((double)total_find_index_us) / (1000.0 * 1000.0);
+	printf("TOTAL FIND INDEX KERNEL TIME: %f\n", total_find_index_s);
 	free(disk);
 	free(objxy);
 	free(weights);
@@ -522,6 +523,7 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 	free(CDF);
 	free(u);
 	free(ind);
+	return total_find_index_s;
 }
 int main(int argc, char * argv[]){
 	
@@ -596,8 +598,9 @@ int main(int argc, char * argv[]){
 	long long endVideoSequence = get_time();
 	printf("VIDEO SEQUENCE TOOK %f\n", elapsed_time(start, endVideoSequence));
 	//call particle filter
-	particleFilter(I, IszX, IszY, Nfr, seed, Nparticles);
+	double find_index_time = particleFilter(I, IszX, IszY, Nfr, seed, Nparticles);
 	long long endParticleFilter = get_time();
+	printf("FIND INDEX TOOK %f\n", find_index_time);
 	printf("PARTICLE FILTER TOOK %f\n", elapsed_time(endVideoSequence, endParticleFilter));
 	printf("ENTIRE PROGRAM TOOK %f\n", elapsed_time(start, endParticleFilter));
 	
