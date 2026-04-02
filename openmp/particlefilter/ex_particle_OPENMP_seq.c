@@ -389,6 +389,7 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 		arrayY[x] = ye;
 	}
 	int k;
+	long long total_find_index_us = 0;
 	
 	printf("TIME TO SET ARRAYS TOOK: %f\n", elapsed_time(get_weights, get_time()));
 	int indX, indY;
@@ -482,6 +483,7 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 		long long u_time = get_time();
 		printf("TIME TO CALC U TOOK: %f\n", elapsed_time(cum_sum, u_time));
 		int j, i;
+		long long find_index_start = get_time();
 		
 		#pragma omp parallel for shared(CDF, Nparticles, xj, yj, u, arrayX, arrayY) private(i, j)
 		for(j = 0; j < Nparticles; j++){
@@ -492,6 +494,9 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 			yj[j] = arrayY[i];
 			
 		}
+		long long find_index_end = get_time();
+		total_find_index_us += (find_index_end - find_index_start);
+		printf("TIME TO RUN FIND INDEX KERNEL TOOK: %f\n", elapsed_time(find_index_start, find_index_end));
 		long long xyj_time = get_time();
 		printf("TIME TO CALC NEW ARRAY X AND Y TOOK: %f\n", elapsed_time(u_time, xyj_time));
 		
@@ -505,6 +510,7 @@ void particleFilter(int * I, int IszX, int IszY, int Nfr, int * seed, int Nparti
 		long long reset = get_time();
 		printf("TIME TO RESET WEIGHTS TOOK: %f\n", elapsed_time(xyj_time, reset));
 	}
+	printf("TOTAL FIND INDEX KERNEL TIME: %f\n", ((double)total_find_index_us) / (1000.0 * 1000.0));
 	free(disk);
 	free(objxy);
 	free(weights);
